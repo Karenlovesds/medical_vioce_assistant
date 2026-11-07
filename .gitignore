@@ -1,0 +1,11 @@
+.env
+.evn.local
+.venv
+__pycache__/
+*.pyc
+.pytest_cache
+
+data/docs/
+data/index/
+
+onsite_interview_prep.md
