@@ -1,11 +1,12 @@
 # Medical Voice Assistant
 
-A safety-first inbound phone agent for general diabetes education. It uses
-LiveKit Agents with an OpenAI realtime model and deterministic safety rules.
+A safety-first inbound phone agent for general medical education. It uses
+LiveKit Agents with a classic STT -> LLM -> TTS pipeline and deterministic
+safety rules.
 
 ## What it does
 
-- Answers general diabetes education questions.
+- Answers general medical education questions.
 - Refuses diagnosis, dosing, insulin, and medication-change advice.
 - Advises the caller to call 911 immediately and offers a human transfer;
   self-harm gets the 988 script.
@@ -20,7 +21,8 @@ It does not provide clinical care, and it is not a HIPAA-compliant system.
 - `agent.py` - agent entrypoint, prompt, tools, safety scripts, phone transfer.
 - `safety.py` - deterministic emergency, self-harm, refusal, injection, and
   handoff checks.
-- `knowledge.py` - BM25 index build and internal document search.
+- `knowledge.py` - optional BM25 document search utility (not currently wired
+  into the agent).
 - `evaluation.py` - safety and guard-latency evaluation harness.
 - `Dockerfile`, `.dockerignore` - deployment image.
 - `requirements.txt` - pinned dependencies.
@@ -32,15 +34,6 @@ cd medical_vioce_assistant
 pip install -r requirements.txt
 ```
 
-Put source documents in `data/docs/`, then build the search index:
-
-```bash
-python knowledge.py
-```
-
-PDF, `.txt`, and `.md` inputs are supported. Scanned PDFs need OCR before they
-can be indexed.
-
 Create a `.env` with:
 
 ```bash
@@ -51,22 +44,6 @@ TRANSFER_NUMBER=+1XXXXXXXXXX
 ```
 
 `.env` is ignored by git and excluded from Docker. Never commit it.
-
-## Internal documents
-
-Source files live in `data/docs/` and are ignored by git and Docker. The
-generated index is written to `data/index/chunks.json` and is ignored by git
-but included in the Docker build context.
-
-`knowledge.py` uses BM25 lexical search, so no embedding API key or external
-service is needed. The agent calls `search_diabetes_docs` before answering a
-diabetes education question, answers only from the returned passages, and cites
-the source and page. If nothing relevant is found, it says it does not have that
-information and suggests asking for a person.
-
-Rebuild the index whenever documents change. If source documents are private,
-build the index locally before `lk agent deploy`; the source files are not
-uploaded.
 
 ## Run
 

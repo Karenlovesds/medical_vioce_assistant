@@ -61,6 +61,8 @@ HANDOFF_PATTERNS = [
     r"\b(?:i want|i'?d like|i would like|can i|could i|may i|let me|please let me)(?: to)? (?:speak|talk|chat) (?:to|with) (?:a |an |the )?(?:human|person|representative|agent|someone|nurse|doctor|clinician)\b",
     r"(?<!do )\bi need to (?:speak|talk|chat) (?:to|with) (?:a |an |the )?(?:human|person|representative|agent|someone|nurse|doctor|clinician)\b",
     r"\b(?:transfer|connect|put) me\b",
+    r"\btransfer(?: me| us)?(?: over)? (?:to|with) (?:a |an |the )?(?:human|person|representative|operator|someone|staff)\b",
+    r"\b(?:speak|talk|chat) (?:to|with) (?:a |an |the )?(?:human|person|representative|operator|someone|staff)\b",
     r"\b(?:real|live|actual) (?:human|person|agent)\b",
     r"\bi need (?:a |an )?(?:human|person|representative|agent)\b",
     r"\b(?:is there|are there) (?:a |an |any )?(?:human|person|representative|agent|someone)\b",
@@ -140,7 +142,8 @@ def detect_injection(text: str) -> bool:
 
 def detect_handoff(text: str) -> bool:
     """Caller asks for a human -> be honest that this MVP cannot transfer."""
-    return _matches(text, HANDOFF_PATTERNS)
+    # _detect (not _matches) so "I don't want to speak to a person" stays benign.
+    return _detect(text, HANDOFF_PATTERNS)
 
 
 def detect_confusion(text: str) -> bool:
