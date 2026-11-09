@@ -170,10 +170,33 @@ def redact_pii(text: str) -> str:
     return text
 
 
-def check(text: str) -> str | None:
-    """Run the checks in priority order; return the first action that fires."""
+def check(text: str, state: dict | None = None) -> str | None:
+    """Run every safety check in priority order; return the first action.
+
+    Pass a shared ``state`` dict across turns to track confusion. A single
+    confused turn returns None (let the model clarify); two in a row returns
+    "confusion" so the caller is offered a person.
+
+    "pii" means private numbers were found: mask them before logs or a handoff
+    summary, then let the call continue normally.
+    """
     # Order matters: life safety first, then refusals, then injection.
     # First match wins; None means let the model handle the turn.
+
+    # Mask SSNs and card numbers once. Keep the cleaned copy in state so
+    # logs and any handoff summary can use it instead of the raw text.
+    redacted = redact_pii(text)
+    if state is not None:
+        state["redacted_text"] = redacted
+
+    # Update the confusion streak before the early returns, so it keeps
+    # counting even on turns that trigger a different action.
+    if state is not None:
+        if detect_confusion(text):
+            state["unknown_streak"] = state.get("unknown_streak", 0) + 1
+        else:
+            state["unknown_streak"] = 0
+
     if detect_self_harm(text):
         return "crisis"  # caller may be in immediate danger
     if detect_emergency(text):
@@ -184,4 +207,8 @@ def check(text: str) -> str | None:
         return "refuse"  # no diagnosis or medication changes
     if detect_injection(text):
         return "injection"  # keep the guardrails in place
+    if state is not None and should_escalate_for_confusion(state):
+        return "confusion"  # repeated confusion -> offer a person
+    if redacted != text:
+        return "pii"  # private numbers were masked; the call continues
     return None

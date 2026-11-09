@@ -1,11 +1,10 @@
-import asyncio  # lets us run safety messages in the background
-import logging  # writes messages to the log
+import asyncio
+import logging
 import os
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
-import safety  # our own safety rules, written in plain Python
-from dotenv import load_dotenv  # reads settings from the .env file
+import safety  # our own safety rules
+from dotenv import load_dotenv
 
 from livekit import rtc
 from livekit.agents import (
@@ -18,13 +17,12 @@ from livekit.agents import (
     MetricsCollectedEvent,  # timing and usage numbers for each turn
     RunContext,  # available inside a tool while it runs
     TurnHandlingOptions,  # settings for listening and interrupting
-    cli,  # runs the agent from the command line
-    inference,  # LiveKit's hosted speech and language models
-    metrics,  # helpers for printing those numbers
+    cli,
+    inference,
+    metrics,
 )
 from livekit.agents.llm import function_tool  # marks a method as something the model can call
 
-# Load variables from the .env file next to this script.
 load_dotenv()
 logger = logging.getLogger("medical-agent")
 TRANSFER_NUMBER = os.getenv("TRANSFER_NUMBER", "")
@@ -37,8 +35,7 @@ class MedicalAgent(Agent):
     # This class defines how the assistant behaves and what it can do.
     def __init__(self) -> None:
         super().__init__(
-            # These instructions are the assistant's rulebook. They control its
-            # tone, how long it talks, and what it must never do.
+            # These instructions are the assistant's rulebook. They control its tone, how long it talks, and what it must never do.
             instructions=(
                 "You are a warm medical voice assistant providing general health education. "
                 "Speak like a person on the phone: reply in 1 to 3 short sentences, under 45 spoken words. "
@@ -54,12 +51,10 @@ class MedicalAgent(Agent):
             )
         )
 
-    # This marker tells LiveKit that the model is allowed to call this method.
     # The short description below it tells the model when to use it.
     @function_tool
     async def get_current_date_and_time(self) -> str:
         """Get the current date and time."""
-        # Use Central Time.
         now = datetime.now(ZoneInfo("America/Chicago"))
         return now.strftime("The current date and time is %B %d, %Y at %I:%M %p")
 
@@ -76,20 +71,20 @@ class MedicalAgent(Agent):
 # This function runs once per session (per room / per phone call).
 @server.rtc_session(agent_name="medical-agent")
 async def entrypoint(ctx: JobContext) -> None:
-    # Pipeline: listen (STT) -> think (LLM) -> speak (TTS). A single
-    # speech-to-speech model would be faster, but this split is easier to
-    # inspect, test, and change piece by piece — and it gives us a real voice
+    # Pipeline: listen (STT) -> think (LLM) -> speak (TTS).
+    # A single speech-to-speech model would be faster, but this split is easier
+    # to inspect, test, and change piece by piece — and it gives us a real voice
     # for the fixed safety messages played with session.say().
     #
-    # - preemptive_generation: start thinking before the caller finishes, so
-    #   replies feel faster. Early work is discarded if they keep talking;
-    #   max_retries=3 caps the waste. Turn off for strictest safety behavior.
+    # - preemptive_generation is off: the model should not start answering from
+    #   a partial transcript during a medical call. This costs some latency but
+    #   avoids replies or tool calls based on words the caller has not finished.
     # - resume_false_interruption: a cough or background noise can look like an
-    #   interruption; after 1 second the agent keeps talking instead of
-    #   losing its turn.
-    # - aec_warmup_duration=3.0: ignore interruptions for the first 3 seconds
-    #   while the caller's device settles echo handling, so the agent doesn't
-    #   interrupt itself.
+    #   interruption; after 2 seconds the agent keeps talking instead of losing
+    #   its turn. The wait gives STT time to catch real speech first.
+    # - aec_warmup_duration=1.0: briefly ignore interruptions while the caller's
+    #   device settles echo handling. Keep it short because caller audio can be
+    #   withheld from STT during this window.
     # - tts_text_transforms: clean the text before speaking (strip emoji and
     #   formatting marks).
     # Every log line includes the room name.
@@ -98,14 +93,11 @@ async def entrypoint(ctx: JobContext) -> None:
     }
     session: AgentSession = AgentSession(
         # Turns the caller's speech into text (the agent's ears).
-        # See all available models at https://docs.livekit.io/agents/models/stt/
         stt=inference.STT("deepgram/nova-3", language="multi"),
         # The language model that decides what to say (the agent's brain).
-        # See all available models at https://docs.livekit.io/agents/models/llm/
         llm=inference.LLM(
             "openai/gpt-4.1-mini",
-            # A hard limit on reply length, as a backup for when the model
-            # ignores the 1-3 sentence rule in its instructions.
+            # A hard limit on reply length, as a backup for when the model ignores the 1-3 sentence rule in its instructions.
             extra_kwargs={"max_tokens": 80, "temperature": 0.6},
         ),
         # Turns the reply into a natural voice (the agent's mouth).
@@ -113,20 +105,21 @@ async def entrypoint(ctx: JobContext) -> None:
         tts=inference.TTS("cartesia/sonic-3", voice="9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
         turn_handling=TurnHandlingOptions(
             interruption={
-                # Background noise can look like the caller interrupting. When
-                # that happens, the agent resumes its sentence instead of
-                # losing its turn.
+                # Background noise can look like the caller interrupting.
+                # When that happens, the agent resumes its sentence instead of losing its turn.
                 "resume_false_interruption": True,
-                "false_interruption_timeout": 1.0,
+                # Give STT more time to produce a transcript before resuming,
+                # so the agent does not talk over a caller who is actually speaking.
+                "false_interruption_timeout": 2.0,
             },
-            # Lets the agent start preparing a reply before the caller has
-            # finished talking.
-            # See more at https://docs.livekit.io/agents/build/audio/#preemptive-generation
-            preemptive_generation={"enabled": True, "max_retries": 3},
+            # Safety-first: do not start the LLM on a partial transcript.
+            # This gives up some latency but avoids replies or tool calls based
+            # on words the caller has not finished saying.
+            preemptive_generation={"enabled": False},
         ),
-        # During the first few seconds, ignore interruptions while the caller's
-        # device adjusts its echo handling.
-        aec_warmup_duration=3.0,
+        # Give echo cancellation a moment to settle, but keep this short:
+        # caller audio can be withheld from STT during the warmup window.
+        aec_warmup_duration=1.0,
         tts_text_transforms=["filter_emoji", "filter_markdown"],
     )
 
@@ -146,8 +139,7 @@ async def entrypoint(ctx: JobContext) -> None:
     await session.start(agent=agent, room=ctx.room)
 
     def on_metrics_collected(ev: MetricsCollectedEvent) -> None:
-        # Print timing and usage numbers for each turn. Speech-to-text numbers
-        # are skipped to keep the log focused on reply speed.
+        # Print timing and usage numbers for each turn. Speech-to-text numbers are skipped to keep the log focused on reply speed.
         if ev.metrics.type == "stt_metrics":
             return
         metrics.log_metrics(ev.metrics, logger=logger)
@@ -185,8 +177,7 @@ async def entrypoint(ctx: JobContext) -> None:
             None,
         )
         if caller is None:
-            # Test sessions in the browser or console have no phone call to
-            # move, so we play the "cannot transfer" message instead.
+            # Test sessions in the browser or console have no phone call to move, so we play the "cannot transfer" message instead.
             logger.warning("handoff requested but no SIP participant is in the room")
             await speak_safety_script(safety_scripts["handoff"])
             return
@@ -211,21 +202,18 @@ async def entrypoint(ctx: JobContext) -> None:
         if not text.strip():
             return
 
-        # Two confused turns in a row means it is time to suggest a person.
-        if safety.detect_confusion(text):
-            safety_state["unknown_streak"] += 1
-        else:
-            safety_state["unknown_streak"] = 0
-
-        action = safety.check(text)
-        if action is None and safety.should_escalate_for_confusion(safety_state):
-            action = "confusion"
+        # Run every safety rule in one place (including the two-strikes confusion check, which needs the shared safety_state).
+        action = safety.check(text, safety_state)
+        if action == "pii":
+            # Private numbers are masked (see safety_state["redacted_text"]);
+            # the model still answers normally, so no script is spoken.
+            logger.info("safety trigger: action=pii (private numbers masked)")
+            return
         if action is None:
             return
 
         logger.warning("safety trigger: action=%s text_len=%d", action, len(text))
-        # This handler must return quickly, so start the spoken response in the
-        # background and keep a reference to it until it finishes.
+        # This handler must return quickly, so start the spoken response in the background and keep a reference to it until it finishes.
         if action == "handoff":
             task = asyncio.create_task(transfer_to_person())
         else:
@@ -234,8 +222,7 @@ async def entrypoint(ctx: JobContext) -> None:
         task.add_done_callback(background_tasks.discard)
 
     def on_conversation_item_added(ev: ConversationItemAddedEvent) -> None:
-        # This fires for typed messages and for the final version of each
-        # spoken message.
+        # This fires for typed messages and for the final version of each spoken message.
         item = ev.item
         if getattr(item, "role", None) == "user":
             handle_user_text(item.text_content)
